@@ -6,11 +6,20 @@ using System.Threading.Tasks;
 using System.Net.Sockets;
 
 using System.Net;
+using static System.Net.Mime.MediaTypeNames;
+using System.IO;
+using System.Runtime.InteropServices.ComTypes;
 namespace TCPServer
 {
     
-    internal class Program
+    public class TCPServerProgram
     {
+
+        const int success = 1;
+        const int SmallestIDValue = 1;
+        //for when I can't come up with a name at the moment, use this as a place holder.
+        const int Generic_Failure = -255;
+        const string Generic_Failure_string = "-255";
         //test image
         static byte[] bitmap1 = { // Size 200x200 pixels
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -216,16 +225,90 @@ namespace TCPServer
             };
         static byte[] bitmap2=new byte[5000];
         //since we do not have a database yet we will use the dictionary type to act as one for testing purposes.
-        static Dictionary<string,string> ResponseList= new Dictionary<string,string>();
-        static Dictionary<string,int> IDTable= new Dictionary<string,int>();
-        static Dictionary<int, byte[]> ImageTable=new Dictionary<int, byte[]>();
+        static Dictionary<string, string> ResponseList;
+        static Dictionary<string, int> IDTable;
+        static Dictionary<int, byte[]> ImageTable;
         static int currentindex = 1;
-        static void SendImage(byte[] bitmap,NetworkStream stream)
+       
+        public static Dictionary<string, int> GetIDTable()
+        {
+            return IDTable;
+        }
+        public static Dictionary<int, byte[]> GetImageTable()
+        {
+            return ImageTable;
+        }
+        public static byte[] ConvertIDtoBytes(int id)
+        {
+            const int intsize = 4;
+            byte[] IDbytes = new byte[intsize];
+            uint temp = 0xFF000000;
+            int bitshiftnum = 24;
+            for (int j = 0; j < IDbytes.Length; j++)
+            {
+                uint temp2 = ((uint)id) & temp;
+                temp2 = temp2 >> bitshiftnum;
+                IDbytes[j] = (byte)temp2;
+                bitshiftnum -= 8;
+                temp = temp >> 8;
+
+            }
+            return IDbytes;
+        }
+        public static int SendData(byte[] data, NetworkStream stream)
+        {
+            try
+            {
+                stream.Write(data, 0, data.Length);
+            }
+            catch (Exception e)
+            {
+                return Generic_Failure;
+            }
+            return success;
+        }
+        public static int ReceiveData(byte[] buffer, NetworkStream stream,ref string data)
+        {
+            try
+            {
+                int i = 0;
+                while ((i = stream.Read(buffer, 0, buffer.Length)) != buffer.Length)    
+                {
+                    // Translate data bytes to a ASCII string.
+                    data = System.Text.Encoding.ASCII.GetString(buffer, 0, i);
+                    Console.WriteLine("Received: {0}", data);
+                    break;
+                }
+            }
+            catch (Exception e)
+            {
+                return Generic_Failure;
+            }
+            return success;
+        }
+        public static void SendImage(byte[] bitmap,NetworkStream stream)
         {
             stream.Write(bitmap, 0, bitmap.Length);
             Console.WriteLine("Sent image data");
         }
-        static string DetermineResponse(string ESPMSG)
+        public static int SendImageProcess(string ESPIP,byte[] image,NetworkStream stream)
+        {
+            int id = GetID(ESPIP);
+            const int IDnotfound = -1;
+            
+            if (id < SmallestIDValue)
+            {
+                Console.WriteLine("Couldn't get ID");
+                return IDnotfound;
+            }
+            else
+            {
+                image = GetImageFromTable(id);
+                SendImage(image, stream);
+                return success;
+            }
+        }
+        public static string DetermineResponse(string ESPMSG)
         {
             string Response="";
             try
@@ -243,18 +326,57 @@ namespace TCPServer
             }
             return "-2";
         }
-        static string SplitIPAndPort(string IPAndPort)
+        public static string SplitIPAndPort(string IPAndPort)
         {
+            const string NonIntFound = "Non integer found while parsing";
+            const string InvalidNumvalue = "-2";
+            const string NonvalidString_Generic = "-1";
             //string is in the format x.x.x.x:PORTNUM.
             string[] temp = IPAndPort.Split(':');
             string IP = temp[0];
+            temp = IP.Split('.');
+            //we somehow received an invalid IP address or some other kind of string.
+            if (temp.Length != 4)
+            {
+                return NonvalidString_Generic;
+            }
+            for (int i = 0; i < 4; i++)
+            {
+                try
+                {
+                    //make sure each entry is a number from 0-255.
+                    if (int.Parse(temp[i]) > 255 || int.Parse(temp[i]) < 0)
+                    {
+                        
+                        return InvalidNumvalue;
+
+                    }
+                }
+                catch (FormatException e)
+                {
+                   
+                    return NonIntFound;
+                }
+                catch (Exception e)
+                {
+                    return e.ToString();
+                }
+            }
             return IP;
         }
-        static int GetID(string IPAndPort)
+        public static int GetID(string IPAndPort)
         {
             string IP = SplitIPAndPort(IPAndPort);
             const int failuretoretrieverecord = -2;
-            const int otherfailure = -1;
+            const int invalidstring = -1;
+            const int otherfailure = -3;
+            const string NonIntFound = "Non integer found while parsing";
+            const string InvalidNumvalue = "-2";
+            const string NonvalidString_Generic = "-1";
+            if (IP == NonvalidString_Generic||IP==NonIntFound||IP==InvalidNumvalue)
+            {
+                return invalidstring;
+            }
             int ID = -1;
             try
             {
@@ -275,14 +397,24 @@ namespace TCPServer
             return otherfailure;
 
         }
-        static void SetID(string IPAndPort)
+        public static int SetID(string IPAndPort)
         {
             //string is in the format x.x.x.x:PORTNUM.
             string IP = SplitIPAndPort(IPAndPort);
+            const int alreadyintable = -2;
+            const int invalidstring = -1;
+            const int otherfailure = -3;
+            const string NonIntFound = "Non integer found while parsing";
+            const string InvalidNumvalue = "-2";
+            const string NonvalidString_Generic = "-1";
+            if (IP == NonvalidString_Generic || IP == NonIntFound || IP == InvalidNumvalue)
+            {
+                return invalidstring;
+            }
             int ID=-1;
             try
             {
-                //will modify ID
+                //will add to table if and only if it's not present.
                 if (IDTable.TryGetValue(IP, out ID) == false)
                 {
                     //device not added to table yet. 
@@ -290,15 +422,22 @@ namespace TCPServer
                     currentindex++;
                     IDTable.Add(IP, ID);
                     Console.WriteLine(ID);
+                    //success
+                    return 1;
                 }
                 else
                 {
-                    Console.WriteLine("IP already in program");
+                    //failure since it's already in the table.
+                    Console.WriteLine("Already in table");
+                    return alreadyintable;
+                    
                 }
             }
             catch (Exception e)
             {
+                //other error.
                 Console.WriteLine(e.ToString());
+                return otherfailure;
             }
         }
         static byte[] GetImageFromTable(int ID)
@@ -324,38 +463,51 @@ namespace TCPServer
             //in case of failure just send the default image.
             return bitmap1;
         }
-        static void AddImagesToImageTable()
+        public static void AddImagesToImageTable()
         {
             //images to be received.
             ImageTable.Add(1, bitmap1);
             ImageTable.Add(2, bitmap2);
         }
-        static void AddItemsToResponseList()
+        public static void AddItemsToResponseList()
         {
-            //Send image to SAML10.
-            ResponseList.Add("GetImage", "SendImage");
-            //Add to database (the dictionary will act in place of that for now).
-            ResponseList.Add("SetID", "GetIP");
-            //retrieve from database and send to SAML10.
-            ResponseList.Add("GetID", "SendID");
-            //Command to end connection
-            ResponseList.Add("quit", "quit");
+            try
+            {
+                //Send image to SAML10.
+                ResponseList.Add("GetImage", "SendImage");
+                //Add to database (the dictionary will act in place of that for now).
+                ResponseList.Add("SetID", "GetIP");
+                //retrieve from database and send to SAML10.
+                ResponseList.Add("GetID", "SendID");
+                //Command to end connection
+                ResponseList.Add("quit", "quit");
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e.Message);
+            }
         }
         //make second test image.  It just sends the loop value from 0-255.
-        static void MakeBitMap2()
+        public static void MakeBitMap2()
         {
             for (int i = 0; i < 5000; i++)
             {
                 bitmap2[i] = ((byte)(i % 256));
             }
         }
-        static void Main(string[] args)
+        //initalize each dictionary and other things.
+        public static void InitProgram()
         {
+            ResponseList = new Dictionary<string, string>();
+            ImageTable = new Dictionary<int, byte[]>();
+            IDTable = new Dictionary<string, int>();
             MakeBitMap2();
             AddItemsToResponseList();
             AddImagesToImageTable();
+        }
+        public static void RunServerLoop()
+        {
             byte[] image;
-            string message = "";
             var ipEndPoint = new IPEndPoint(IPAddress.Any, 7777);
             //for receiving
             byte[] buffer = new byte[256];
@@ -374,14 +526,7 @@ namespace TCPServer
                     {
                         data = null;
                         NetworkStream stream = client.GetStream();
-                        int i = 0;
-                        while ((i = stream.Read(buffer, 0, buffer.Length)) != buffer.Length)
-                        {
-                            // Translate data bytes to a ASCII string.
-                            data = System.Text.Encoding.ASCII.GetString(buffer, 0, i);
-                            Console.WriteLine("Received: {0}", data);
-                            break;
-                        }
+                        ReceiveData(buffer, stream,ref data);
                         string response = DetermineResponse(data);
                         Console.WriteLine(response);
                         string ESPIP = client.Client.RemoteEndPoint.ToString();
@@ -403,7 +548,9 @@ namespace TCPServer
                                 break;
                             //called on the first time a device is started up.  That way it doesn't have to save it permeantly; for now.
                             case "GetIP":
-                                SetID(ESPIP);
+                                id=SetID(ESPIP);
+                                
+                                SendData(ConvertIDtoBytes(id), stream);
                                 break;
                             //Let the device get the ID number.
                             case "SendID":
@@ -417,19 +564,7 @@ namespace TCPServer
                                 }
                                 else
                                 {
-                                    byte[] IDbytes = new byte[4];
-                                    uint temp = 0xFF000000;
-                                    int bitshiftnum = 24;
-                                    for (int j = 0; i < IDbytes.Length; i++)
-                                    {
-                                        uint temp2 = ((uint)id) & temp;
-                                        temp2 = temp2 >> bitshiftnum;
-                                        IDbytes[j] = (byte)temp2;
-                                        bitshiftnum -= 8;
-                                        temp = temp >> 8;
-
-                                    }
-                                    stream.Write(IDbytes, 0, IDbytes.Length);
+                                    SendData(ConvertIDtoBytes(id), stream);
                                 }
                                 break;
                             case "quit":
@@ -448,7 +583,7 @@ namespace TCPServer
                                 //send a single 0xFF to indicate failure to send a valid message.
                                 const byte failurebyte = 0xFF;
                                 byte[] invalidmessage = { failurebyte };
-                                stream.Write(invalidmessage, 0, 1);
+                                SendData(invalidmessage, stream);
                                 break;
                         }
 
@@ -465,6 +600,11 @@ namespace TCPServer
                     listener.Stop();
                 }
             }
+        }
+        public static void Main(string[] args)
+        {
+            InitProgram();
+            RunServerLoop();
             Console.WriteLine("Should not be reached");
         }
     }
