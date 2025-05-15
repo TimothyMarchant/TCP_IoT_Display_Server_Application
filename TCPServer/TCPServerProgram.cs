@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Threading;
 using System.Net.Sockets;
 
 using System.Net;
@@ -14,14 +15,14 @@ namespace TCPServer
     
     public class TCPServerProgram
     {
-
-        const int success = 1;
-        const int SmallestIDValue = 1;
+        private static TcpListener listener=null;
+        private const int success = 1;
+        private const int SmallestIDValue = 1;
         //for when I can't come up with a name at the moment, use this as a place holder.
-        const int Generic_Failure = -255;
-        const string Generic_Failure_string = "-255";
+        private const int Generic_Failure = -255;
+        private const string Generic_Failure_string = "-255";
         //test image
-        static byte[] bitmap1 = { // Size 200x200 pixels
+        private static byte[] bitmap1 = { // Size 200x200 pixels
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xe0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07,
@@ -223,12 +224,14 @@ namespace TCPServer
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
             };
-        static byte[] bitmap2=new byte[5000];
+        private static byte[] bitmap2=new byte[5000];
         //since we do not have a database yet we will use the dictionary type to act as one for testing purposes.
-        static Dictionary<string, string> ResponseList;
-        static Dictionary<string, int> IDTable;
-        static Dictionary<int, byte[]> ImageTable;
-        static int currentindex = 1;
+        private static Dictionary<string, string> ResponseList;
+        //variables marked as volatile since they may change from a different thread (meant for when we do multiple connections).
+        private static volatile Dictionary<string, int> IDTable;
+        private static volatile Dictionary<int, byte[]> ImageTable;
+        private static volatile int currentindex = 1;
+        //meant for testing classes to get.
        
         public static Dictionary<string, int> GetIDTable()
         {
@@ -255,7 +258,7 @@ namespace TCPServer
             }
             return IDbytes;
         }
-        public static int SendData(byte[] data, NetworkStream stream)
+        private static int SendData(byte[] data, NetworkStream stream)
         {
             try
             {
@@ -291,7 +294,7 @@ namespace TCPServer
             stream.Write(bitmap, 0, bitmap.Length);
             Console.WriteLine("Sent image data");
         }
-        public static int SendImageProcess(string ESPIP,byte[] image,NetworkStream stream)
+        public static int SendImageProcess(string ESPIP,NetworkStream stream)
         {
             int id = GetID(ESPIP);
             const int IDnotfound = -1;
@@ -299,13 +302,48 @@ namespace TCPServer
             if (id < SmallestIDValue)
             {
                 Console.WriteLine("Couldn't get ID");
+                const string NoIdFound = "IDNOTFOUND";
+                SendData(Encoding.ASCII.GetBytes(NoIdFound), stream);
                 return IDnotfound;
             }
             else
             {
-                image = GetImageFromTable(id);
+                byte[]image = GetImageFromTable(id);
+                const string IDFound = "IDFOUND";
+                SendData(Encoding.ASCII.GetBytes(IDFound), stream);
+                byte[] buffer = new byte[1];
+                string temp="";
+                ReceiveData(buffer, stream,ref temp);
                 SendImage(image, stream);
                 return success;
+            }
+        }
+        public static void GetIP(string ESPIP,NetworkStream stream)
+        {
+            int ID = SetID(ESPIP);
+            if (ID <= 0)
+            {
+                SendData(Encoding.ASCII.GetBytes("FAIL"), stream);
+            }
+            else
+            {
+                byte[] IDbytes=ConvertIDtoBytes(ID);
+                SendData(IDbytes, stream);
+
+            }
+        }
+        public static void SendID(int id,NetworkStream stream)
+        {
+
+            if (id < 1)
+            {
+                Console.WriteLine("Error: " + id);
+                Console.WriteLine("Doesn't have record/other problem");
+                SendData(Encoding.ASCII.GetBytes("FAIL"), stream);
+            }
+            else
+            {
+                SendData(ConvertIDtoBytes(id), stream);
             }
         }
         public static string DetermineResponse(string ESPMSG)
@@ -423,7 +461,7 @@ namespace TCPServer
                     IDTable.Add(IP, ID);
                     Console.WriteLine(ID);
                     //success
-                    return 1;
+                    return ID;
                 }
                 else
                 {
@@ -501,71 +539,41 @@ namespace TCPServer
             ResponseList = new Dictionary<string, string>();
             ImageTable = new Dictionary<int, byte[]>();
             IDTable = new Dictionary<string, int>();
+            currentindex = 1;
             MakeBitMap2();
             AddItemsToResponseList();
             AddImagesToImageTable();
         }
-        public static void RunServerLoop()
+        public static void RunServerLoop(object Client)
         {
-            byte[] image;
-            var ipEndPoint = new IPEndPoint(IPAddress.Any, 7777);
+            TcpClient client = (TcpClient)Client;
+            NetworkStream stream = client.GetStream();
             //for receiving
             byte[] buffer = new byte[256];
-            //run forever until closed
-            while (true)
-            {
-                TcpListener listener = new TcpListener(ipEndPoint);
                 string data = null;
                 try
                 {
-                    listener.Start();
-                    Console.WriteLine("Waiting for connection");
-                    TcpClient client = listener.AcceptTcpClient();
-                    Console.WriteLine("Connected");
                     while (client.Connected)
                     {
                         data = null;
-                        NetworkStream stream = client.GetStream();
+                        
                         ReceiveData(buffer, stream,ref data);
                         string response = DetermineResponse(data);
                         Console.WriteLine(response);
                         string ESPIP = client.Client.RemoteEndPoint.ToString();
-                        int id = -1;
                         switch (response)
                         {
                             case "SendImage":
-
-                                id = GetID(ESPIP);
-                                if (id < 1)
-                                {
-                                    Console.WriteLine("Couldn't get ID");
-                                }
-                                else
-                                {
-                                    image = GetImageFromTable(id);
-                                    SendImage(image, stream);
-                                }
+                                SendImageProcess(ESPIP, stream);
                                 break;
                             //called on the first time a device is started up.  That way it doesn't have to save it permeantly; for now.
                             case "GetIP":
-                                id=SetID(ESPIP);
-                                
-                                SendData(ConvertIDtoBytes(id), stream);
+                                GetIP(ESPIP, stream);
                                 break;
                             //Let the device get the ID number.
                             case "SendID":
-                                id = GetID(ESPIP);
-
-                                if (id < 1)
-                                {
-                                    Console.WriteLine("Error: " + id);
-                                    Console.WriteLine("Doesn't have record/other problem");
-
-                                }
-                                else
-                                {
-                                    SendData(ConvertIDtoBytes(id), stream);
-                                }
+                                int id = GetID(ESPIP);
+                                SendID(id, stream);
                                 break;
                             case "quit":
                                 //microsoft documentation says to do this for closing a socket.
@@ -573,6 +581,10 @@ namespace TCPServer
                                 {
                                     client.Client.Shutdown(SocketShutdown.Both);
                                 }
+                            catch (Exception e)
+                            {
+                                Console.WriteLine(e.ToString());
+                            }
                                 finally
                                 {
                                     client.Close();
@@ -593,18 +605,41 @@ namespace TCPServer
                 {
                     Console.WriteLine("Total Failure");
                     Console.WriteLine(ex.ToString());
-                }
+                //client.Close();
+                stream.Close();
+            }
                 finally
                 {
-                    Console.WriteLine();
-                    listener.Stop();
+                    Console.WriteLine("END OF THREAD");
+                
+                }
+            }
+        public static void listenfordevice()
+        {
+            var ipEndPoint = new IPEndPoint(IPAddress.Any, 7777);
+            listener = new TcpListener(ipEndPoint);
+            listener.Start();
+            //run forever until closed
+            while (true)
+            {
+                try
+                {
+                    
+                    Console.WriteLine("Waiting for connection");
+                    TcpClient client = listener.AcceptTcpClient();
+                    Console.WriteLine("Connected");
+                    Thread t=new Thread(new ParameterizedThreadStart(RunServerLoop));
+                    t.Start(client);
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine(e.ToString());
                 }
             }
         }
         public static void Main(string[] args)
         {
-            InitProgram();
-            RunServerLoop();
+            listenfordevice();
             Console.WriteLine("Should not be reached");
         }
     }
