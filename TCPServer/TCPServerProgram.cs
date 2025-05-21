@@ -5,23 +5,24 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Threading;
 using System.Net.Sockets;
-
 using System.Net;
-using static System.Net.Mime.MediaTypeNames;
 using System.IO;
-using System.Runtime.InteropServices.ComTypes;
+using Microsoft.Data.SqlClient;
+
 namespace TCPServer
 {
     
     public class TCPServerProgram
     {
+        //meant for future database.  Will be added after this server is fully tested with the real microcontrollers.
+        const string connectionstring_Database = "";
         private static TcpListener listener=null;
         private const int success = 1;
         private const int SmallestIDValue = 1;
         //for when I can't come up with a name at the moment, use this as a place holder.
         private const int Generic_Failure = -255;
         private const string Generic_Failure_string = "-255";
-        //test image
+        //test images
         private static byte[] bitmap1 = { // Size 200x200 pixels
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -232,7 +233,14 @@ namespace TCPServer
         private static volatile Dictionary<int, byte[]> ImageTable;
         private static volatile int currentindex = 1;
         //meant for testing classes to get.
-       
+        public static byte[] GetBitmap1()
+        {
+            return bitmap1;
+        }
+        public static byte[] GetBitmap2()
+        {
+            return bitmap2;
+        }
         public static Dictionary<string, int> GetIDTable()
         {
             return IDTable;
@@ -274,14 +282,11 @@ namespace TCPServer
         {
             try
             {
+
                 int i = 0;
-                while ((i = stream.Read(buffer, 0, buffer.Length)) != buffer.Length)    
-                {
-                    // Translate data bytes to a ASCII string.
-                    data = System.Text.Encoding.ASCII.GetString(buffer, 0, i);
-                    Console.WriteLine("Received: {0}", data);
-                    break;
-                }
+                //all responses will be less than 256 bytes long.
+                i = stream.Read(buffer, 0, buffer.Length);
+                data = Encoding.ASCII.GetString(buffer,0,i);
             }
             catch (Exception e)
             {
@@ -289,10 +294,11 @@ namespace TCPServer
             }
             return success;
         }
-        public static void SendImage(byte[] bitmap,NetworkStream stream)
+        public static void SendImage(byte[] bitmap,NetworkStream stream,int startindex)
         {
-            stream.Write(bitmap, 0, bitmap.Length);
-            Console.WriteLine("Sent image data");
+            const int TCPSegmentlength = 1000;
+            stream.Write(bitmap, startindex*TCPSegmentlength, TCPSegmentlength);
+            //Console.WriteLine("Sent image data");
         }
         public static int SendImageProcess(string ESPIP,NetworkStream stream)
         {
@@ -301,7 +307,7 @@ namespace TCPServer
             
             if (id < SmallestIDValue)
             {
-                Console.WriteLine("Couldn't get ID");
+                //Console.WriteLine("Couldn't get ID");
                 const string NoIdFound = "IDNOTFOUND";
                 SendData(Encoding.ASCII.GetBytes(NoIdFound), stream);
                 return IDnotfound;
@@ -312,9 +318,15 @@ namespace TCPServer
                 const string IDFound = "IDFOUND";
                 SendData(Encoding.ASCII.GetBytes(IDFound), stream);
                 byte[] buffer = new byte[1];
-                string temp="";
-                ReceiveData(buffer, stream,ref temp);
-                SendImage(image, stream);
+                //wait for an acknowledgement.
+                stream.Read(buffer, 0, buffer.Length);
+                Console.WriteLine("SENDING IMAGE");
+                const int imageTCPsegments = 5;
+                for (int i = 0; i < 5; i++)
+                {
+                    SendImage(image, stream,i);
+                }
+                
                 return success;
             }
         }
@@ -478,7 +490,7 @@ namespace TCPServer
                 return otherfailure;
             }
         }
-        static byte[] GetImageFromTable(int ID)
+        public static byte[] GetImageFromTable(int ID)
         {
             byte[] imageData;
             try
@@ -503,7 +515,7 @@ namespace TCPServer
         }
         public static void AddImagesToImageTable()
         {
-            //images to be received.
+            //images to be received.  In a real application this would be done from an outside application.
             ImageTable.Add(1, bitmap1);
             ImageTable.Add(2, bitmap2);
         }
@@ -558,17 +570,21 @@ namespace TCPServer
                         data = null;
                         
                         ReceiveData(buffer, stream,ref data);
+                    Console.WriteLine(data);
                         string response = DetermineResponse(data);
-                        Console.WriteLine(response);
                         string ESPIP = client.Client.RemoteEndPoint.ToString();
-                        switch (response)
+                    Console.WriteLine(ESPIP);
+                    Console.WriteLine(response);
+                    switch (response)
                         {
                             case "SendImage":
                                 SendImageProcess(ESPIP, stream);
                                 break;
                             //called on the first time a device is started up.  That way it doesn't have to save it permeantly; for now.
                             case "GetIP":
-                                GetIP(ESPIP, stream);
+                            
+                            GetIP(ESPIP, stream);
+                            
                                 break;
                             //Let the device get the ID number.
                             case "SendID":
@@ -591,7 +607,8 @@ namespace TCPServer
                                 }
                                 break;
                             default:
-                                Console.WriteLine("invalid message");
+                                //
+                                //Console.WriteLine("invalid message");
                                 //send a single 0xFF to indicate failure to send a valid message.
                                 const byte failurebyte = 0xFF;
                                 byte[] invalidmessage = { failurebyte };
@@ -639,6 +656,7 @@ namespace TCPServer
         }
         public static void Main(string[] args)
         {
+            InitProgram();
             listenfordevice();
             Console.WriteLine("Should not be reached");
         }
