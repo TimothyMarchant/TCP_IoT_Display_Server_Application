@@ -296,6 +296,7 @@ namespace TCPServer
         }
         public static void SendImage(byte[] bitmap,NetworkStream stream,int startindex)
         {
+            //nonheader information length
             const int TCPSegmentlength = 1000;
             stream.Write(bitmap, startindex*TCPSegmentlength, TCPSegmentlength);
             //Console.WriteLine("Sent image data");
@@ -322,10 +323,19 @@ namespace TCPServer
                 stream.Read(buffer, 0, buffer.Length);
                 Console.WriteLine("SENDING IMAGE");
                 const int imageTCPsegments = 5;
-                for (int i = 0; i < 5; i++)
+                //Images are sent this way so that the ESP device transmit over UART packets of length 1000 (it will transmit +IPD,1000:[data]).
+                //Sometimes the TCP segment lengths that are transmitted over UART are over 1460;  I think this is something with the ESP 01S, from what I've read TCP segments are usually capped at 1460.
+                for (int i = 0; i < imageTCPsegments; i++)
                 {
+                    Console.WriteLine("Sending segment {0}", i);
                     SendImage(image, stream,i);
+                    //This is here so we aren't waiting for another byte after sending the entire image.
+                    if (i < imageTCPsegments - 1)
+                    {
+                        stream.Read(buffer, 0, buffer.Length);
+                    }
                 }
+                Console.WriteLine("Success");
                 
                 return success;
             }
@@ -595,6 +605,9 @@ namespace TCPServer
                                 //microsoft documentation says to do this for closing a socket.
                                 try
                                 {
+                                //we should send a quit string.  Send 1 as a success code.
+                                byte[] Success = { 1 };
+                                SendData(Success,stream);
                                     client.Client.Shutdown(SocketShutdown.Both);
                                 }
                             catch (Exception e)
