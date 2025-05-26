@@ -22,6 +22,9 @@ namespace TCPServer
         //for when I can't come up with a name at the moment, use this as a place holder.
         private const int Generic_Failure = -255;
         private const string Generic_Failure_string = "-255";
+        //timeout default values both are for three seconds/3000 milliseconds.  It shouldn't take any longer than 3 seconds for any transmission.
+        const int write_timeout_default_ms = 3000;
+        const int read_timeout_default_ms = 3000;
         //test images
         private static byte[] bitmap1 = { // Size 200x200 pixels
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -272,6 +275,11 @@ namespace TCPServer
             {
                 stream.Write(data, 0, data.Length);
             }
+            catch (IOException e)
+            {
+                Console.WriteLine(e.Message);
+                return Generic_Failure;
+            }
             catch (Exception e)
             {
                 return Generic_Failure;
@@ -288,18 +296,25 @@ namespace TCPServer
                 i = stream.Read(buffer, 0, buffer.Length);
                 data = Encoding.ASCII.GetString(buffer,0,i);
             }
+            catch (IOException e)
+            {
+                Console.WriteLine(e.Message);
+                return -1;
+            }
             catch (Exception e)
             {
+                Console.WriteLine(e.Message);
                 return Generic_Failure;
             }
             return success;
         }
-        public static void SendImage(byte[] bitmap,NetworkStream stream,int startindex)
+        public static int SendImage(byte[] bitmap,NetworkStream stream,int startindex)
         {
             //nonheader information length
             const int TCPSegmentlength = 1000;
-            stream.Write(bitmap, startindex*TCPSegmentlength, TCPSegmentlength);
+            stream.Write(bitmap, startindex * TCPSegmentlength, TCPSegmentlength);
             //Console.WriteLine("Sent image data");
+            return success;
         }
         public static int SendImageProcess(string ESPIP,NetworkStream stream)
         {
@@ -566,10 +581,21 @@ namespace TCPServer
             AddItemsToResponseList();
             AddImagesToImageTable();
         }
+        //incase I want to modify it later.
+        public static void SetReadTimeout(NetworkStream stream,int timeout)
+        {
+            stream.ReadTimeout = timeout;
+        }
+        public static void SetWriteTimeout(NetworkStream stream,int timeout)
+        {
+            stream.WriteTimeout = timeout;
+        }
         public static void RunServerLoop(object Client)
         {
             TcpClient client = (TcpClient)Client;
             NetworkStream stream = client.GetStream();
+            SetReadTimeout(stream,read_timeout_default_ms);
+            SetWriteTimeout(stream,write_timeout_default_ms);
             //for receiving
             byte[] buffer = new byte[256];
                 string data = null;
@@ -579,7 +605,10 @@ namespace TCPServer
                     {
                         data = null;
                         
-                        ReceiveData(buffer, stream,ref data);
+                        if (ReceiveData(buffer, stream,ref data) == -1)
+                    {
+                        throw new IOException();
+                    }
                     Console.WriteLine(data);
                         string response = DetermineResponse(data);
                         string ESPIP = client.Client.RemoteEndPoint.ToString();
@@ -631,6 +660,12 @@ namespace TCPServer
 
                     }
                 }
+            catch (IOException e)
+            {
+                Console.WriteLine(e.ToString());
+                client.Close();
+                stream.Close();
+            }
                 catch (Exception ex)
                 {
                     Console.WriteLine("Total Failure");
