@@ -1,1 +1,2 @@
 # TCPServer
+This is the server application that goes with my IoT display project https://github.com/TimothyMarchant/IoT_Epaper_Display_FreeRTOS_Port.  The server currently has a few commands for setting IDs in a table (not a database) and sending image data.  I intend to add a database element to it.  I also wrote unit tests for the server here https://github.com/TimothyMarchant/TCPServer_IoT_Display_Tests.
